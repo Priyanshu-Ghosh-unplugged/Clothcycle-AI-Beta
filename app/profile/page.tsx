@@ -1,23 +1,20 @@
-import { redirect } from "next/navigation"
-import { getServerSession } from "next-auth"
-import { authOptions } from "@/lib/auth"
-import { ProfileContent } from "./profile-content"
+import { Navbar } from "@/components/navbar"
+import { ProfileHeader } from "@/components/profile-header"
+import { ProfileTabs } from "@/components/profile-tabs"
+import { Footer } from "@/components/footer"
+import { WalletRequired } from "@/components/wallet-required"
 
-export default async function ProfilePage() {
-  const session = await getServerSession(authOptions)
-
-  if (!session) {
-    redirect("/auth/signin?callbackUrl=/profile")
-  }
-
+export default function ProfilePage() {
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold">My Profile</h1>
-        <p className="text-muted-foreground mt-2">Manage your items and view your sustainable fashion impact</p>
-      </div>
-
-      <ProfileContent />
+    <div className="min-h-screen">
+      <Navbar />
+      <WalletRequired message="Connect your wallet to view your profile and track your impact">
+        <main className="container mx-auto px-4 py-8">
+          <ProfileHeader />
+          <ProfileTabs />
+        </main>
+      </WalletRequired>
+      <Footer />
     </div>
   )
 }

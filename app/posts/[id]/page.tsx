@@ -1,31 +1,13 @@
 import { notFound } from "next/navigation"
-import { PostDetail } from "./post-detail"
-import { createServerClient } from "@/lib/supabase"
+import { Navbar } from "@/components/navbar"
+import { PostDetail } from "@/components/post-detail"
+import { Footer } from "@/components/footer"
+import { getPost } from "@/lib/posts"
 
 interface PostPageProps {
   params: {
     id: string
   }
-}
-
-async function getPost(id: string) {
-  const supabase = createServerClient()
-
-  const { data: post, error } = await supabase
-    .from("posts")
-    .select(`
-      *,
-      owner:users(id, name, email, image)
-    `)
-    .eq("id", id)
-    .eq("status", "available")
-    .single()
-
-  if (error || !post) {
-    return null
-  }
-
-  return post
 }
 
 export default async function PostPage({ params }: PostPageProps) {
@@ -35,5 +17,13 @@ export default async function PostPage({ params }: PostPageProps) {
     notFound()
   }
 
-  return <PostDetail post={post} />
+  return (
+    <div className="min-h-screen">
+      <Navbar />
+      <main className="container mx-auto px-4 py-8">
+        <PostDetail post={post} />
+      </main>
+      <Footer />
+    </div>
+  )
 }
