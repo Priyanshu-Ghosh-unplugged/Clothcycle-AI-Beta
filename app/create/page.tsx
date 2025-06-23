@@ -1,23 +1,27 @@
-import { redirect } from "next/navigation"
-import { getServerSession } from "next-auth"
-import { authOptions } from "@/lib/auth"
-import { PostForm } from "@/components/posts/post-form"
+import { Navbar } from "@/components/navbar"
+import { CreatePostForm } from "@/components/create-post-form"
+import { Footer } from "@/components/footer"
+import { WalletRequired } from "@/components/wallet-required"
 
-export default async function CreatePostPage() {
-  const session = await getServerSession(authOptions)
-
-  if (!session) {
-    redirect("/auth/signin?callbackUrl=/create")
-  }
-
+export default function CreatePage() {
   return (
-    <div className="max-w-2xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold">Add New Item</h1>
-        <p className="text-muted-foreground mt-2">Share your pre-loved fashion with the community</p>
-      </div>
+    <div className="min-h-screen">
+      <Navbar />
+      <WalletRequired message="Connect your wallet to list items and earn rewards">
+        <main className="container mx-auto px-4 py-8">
+          <div className="max-w-2xl mx-auto">
+            <div className="mb-8">
+              <h1 className="text-4xl font-bold mb-4">List Your Item</h1>
+              <p className="text-muted-foreground text-lg">
+                Upload your clothing item and let our AI help you create the perfect listing
+              </p>
+            </div>
 
-      <PostForm />
+            <CreatePostForm />
+          </div>
+        </main>
+      </WalletRequired>
+      <Footer />
     </div>
   )
 }
