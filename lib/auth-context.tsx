@@ -34,8 +34,11 @@ interface AuthContextType {
   initialized: boolean
   signIn: (email: string, password: string) => Promise<void>
   signUp: (email: string, password: string, name: string) => Promise<void>
+  signInWithGoogle: () => Promise<void>
   signOut: () => Promise<void>
+  resetPassword: (email: string) => Promise<void>
   updateUserProfile: (data: Partial<UserProfile>) => Promise<void>
+  resendConfirmation: (email: string) => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -55,7 +58,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       id: user.id,
       email: user.email || "",
       name: user.user_metadata?.name || user.user_metadata?.full_name || "User",
-      avatar_url: user.user_metadata?.avatar_url,
+      avatar_url: user.user_metadata?.avatar_url || user.user_metadata?.picture,
       wallet_address: walletAddress,
       bio: "Sustainable fashion enthusiast",
       location: "San Francisco, CA",
@@ -65,7 +68,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       total_items_sold: 8,
       total_items_donated: 4,
       total_co2_saved: 45.2,
-      is_verified: false,
+      is_verified: user.email_confirmed_at ? true : false,
       created_at: user.created_at || new Date().toISOString(),
       updated_at: new Date().toISOString(),
     }
@@ -109,6 +112,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         } else if (event === "SIGNED_OUT") {
           setUser(null)
           setUserProfile(null)
+        } else if (event === "TOKEN_REFRESHED" && session?.user) {
+          // Update user data on token refresh
+          setUser(session.user)
+          if (userProfile) {
+            const updatedProfile = createMockProfile(session.user, wallet.address || undefined)
+            setUserProfile(updatedProfile)
+          }
         }
       } catch (error) {
         console.error("Error handling auth state change:", error)
@@ -118,7 +128,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => {
       subscription.unsubscribe()
     }
-  }, [supabase.auth, createMockProfile, wallet.address])
+  }, [supabase.auth, createMockProfile, wallet.address, userProfile])
 
   // Update wallet address in profile when wallet changes (but don't recreate entire profile)
   useEffect(() => {
@@ -141,11 +151,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw new Error("Please connect your wallet first")
       }
 
-      const { error } = await supabase.auth.signInWithPassword({
+      const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,
       })
-      if (error) throw error
+
+      if (error) {
+        // Handle specific auth errors
+        if (error.message.includes("Invalid login credentials")) {
+          throw new Error("Invalid email or password")
+        } else if (error.message.includes("Email not confirmed")) {
+          throw new Error("Please check your email and click the confirmation link")
+        } else {
+          throw error
+        }
+      }
+
+      return data
     },
     [wallet.address, supabase.auth],
   )
@@ -156,20 +178,56 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw new Error("Please connect your wallet first")
       }
 
-      const { error } = await supabase.auth.signUp({
+      const { data, error } = await supabase.auth.signUp({
         email,
         password,
         options: {
           data: {
             name,
+            full_name: name,
             wallet_address: wallet.address,
           },
         },
       })
-      if (error) throw error
+
+      if (error) {
+        // Handle specific signup errors
+        if (error.message.includes("User already registered")) {
+          throw new Error("An account with this email already exists")
+        } else if (error.message.includes("Password should be at least")) {
+          throw new Error("Password must be at least 6 characters long")
+        } else {
+          throw error
+        }
+      }
+
+      return data
     },
     [wallet.address, supabase.auth],
   )
+
+  const signInWithGoogle = useCallback(async () => {
+    if (!wallet.address) {
+      throw new Error("Please connect your wallet first")
+    }
+
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback`,
+        queryParams: {
+          access_type: "offline",
+          prompt: "consent",
+        },
+      },
+    })
+
+    if (error) {
+      throw error
+    }
+
+    return data
+  }, [wallet.address, supabase.auth])
 
   const signOut = useCallback(async () => {
     const { error } = await supabase.auth.signOut()
@@ -179,6 +237,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null)
     setUserProfile(null)
   }, [supabase.auth])
+
+  const resetPassword = useCallback(
+    async (email: string) => {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/auth/reset-password`,
+      })
+
+      if (error) {
+        throw error
+      }
+    },
+    [supabase.auth],
+  )
+
+  const resendConfirmation = useCallback(
+    async (email: string) => {
+      const { error } = await supabase.auth.resend({
+        type: "signup",
+        email,
+        options: {
+          emailRedirectTo: `${window.location.origin}/auth/callback`,
+        },
+      })
+
+      if (error) {
+        throw error
+      }
+    },
+    [supabase.auth],
+  )
 
   const updateUserProfile = useCallback(
     async (data: Partial<UserProfile>) => {
@@ -218,8 +306,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     initialized,
     signIn,
     signUp,
+    signInWithGoogle,
     signOut,
+    resetPassword,
     updateUserProfile,
+    resendConfirmation,
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
