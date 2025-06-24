@@ -28,7 +28,7 @@ export interface Post {
   isDonation: boolean
   tags?: string[]
   ownerId: string
-  owner?: User
+  owner?: Partial<User>
   aiInsights?: AIInsights
   createdAt: string
   updatedAt: string

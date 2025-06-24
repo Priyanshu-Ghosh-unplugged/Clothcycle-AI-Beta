@@ -1,4 +1,6 @@
 import type { Post } from "@/lib/types"
+import { db } from "@/lib/firebase"
+import { collection, addDoc, getDocs, getDoc, doc, query, orderBy } from "firebase/firestore"
 
 // Mock data for development - replace with real Supabase queries
 const mockPosts: Post[] = [
@@ -93,48 +95,31 @@ const mockPosts: Post[] = [
 ]
 
 export async function getPosts(): Promise<Post[]> {
-  // In production, this would be:
-  // const supabase = createClient()
-  // const { data, error } = await supabase
-  //   .from('posts')
-  //   .select('*, owner:users(*)')
-  //   .order('created_at', { ascending: false })
-
-  return mockPosts
+  const postsCol = collection(db, "posts")
+  const q = query(postsCol, orderBy("createdAt", "desc"))
+  const snapshot = await getDocs(q)
+  return snapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() } as Post))
 }
 
 export async function getFeaturedPosts(): Promise<Post[]> {
-  // Return first 3 posts as featured
-  return mockPosts.slice(0, 3)
+  const posts = await getPosts()
+  return posts.slice(0, 3)
 }
 
 export async function getPost(id: string): Promise<Post | null> {
-  // In production:
-  // const supabase = createClient()
-  // const { data, error } = await supabase
-  //   .from('posts')
-  //   .select('*, owner:users(*)')
-  //   .eq('id', id)
-  //   .single()
-
-  return mockPosts.find((post) => post.id === id) || null
+  const postDoc = doc(db, "posts", id)
+  const docSnap = await getDoc(postDoc)
+  if (!docSnap.exists()) return null
+  return { id: docSnap.id, ...docSnap.data() } as Post
 }
 
 export async function createPost(postData: Omit<Post, "id" | "createdAt" | "updatedAt">): Promise<Post> {
-  // In production:
-  // const supabase = createClient()
-  // const { data, error } = await supabase
-  //   .from('posts')
-  //   .insert(postData)
-  //   .select()
-  //   .single()
-
-  const newPost: Post = {
+  const now = new Date().toISOString()
+  const docRef = await addDoc(collection(db, "posts"), {
     ...postData,
-    id: Math.random().toString(36).substr(2, 9),
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  }
-
-  return newPost
+    createdAt: now,
+    updatedAt: now,
+  })
+  const docSnap = await getDoc(docRef)
+  return { id: docSnap.id, ...docSnap.data() } as Post
 }
