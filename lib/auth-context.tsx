@@ -1,9 +1,19 @@
 "use client"
 
 import type React from "react"
-import { createContext, useContext, useEffect, useState, useCallback, useRef } from "react"
-import { createClient } from "@/lib/supabase"
-import type { User } from "@supabase/supabase-js"
+import { createContext, useContext, useEffect, useState, useCallback } from "react"
+import { auth, db } from "@/lib/firebase"
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut as firebaseSignOut,
+  GoogleAuthProvider,
+  signInWithPopup,
+  onAuthStateChanged,
+  updateProfile,
+  sendPasswordResetEmail,
+} from "firebase/auth"
+import { doc, setDoc, getDoc } from "firebase/firestore"
 import { useWallet } from "@/lib/wallet-context"
 
 interface UserProfile {
@@ -28,7 +38,7 @@ interface UserProfile {
 }
 
 interface AuthContextType {
-  user: User | null
+  user: any | null
   userProfile: UserProfile | null
   loading: boolean
   initialized: boolean
@@ -44,260 +54,120 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null)
+  const [user, setUser] = useState<any | null>(null)
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
   const [loading, setLoading] = useState(true)
   const [initialized, setInitialized] = useState(false)
   const wallet = useWallet()
-  const supabase = createClient()
-  const initializationRef = useRef(false)
 
-  // Memoized profile creation to prevent recreating on every render
-  const createMockProfile = useCallback((user: User, walletAddress?: string): UserProfile => {
-    return {
-      id: user.id,
-      email: user.email || "",
-      name: user.user_metadata?.name || user.user_metadata?.full_name || "User",
-      avatar_url: user.user_metadata?.avatar_url || user.user_metadata?.picture,
-      wallet_address: walletAddress,
-      bio: "Sustainable fashion enthusiast",
-      location: "San Francisco, CA",
-      green_tokens: 156,
-      sustainability_score: 78,
-      total_items_listed: 12,
-      total_items_sold: 8,
-      total_items_donated: 4,
-      total_co2_saved: 45.2,
-      is_verified: user.email_confirmed_at ? true : false,
-      created_at: user.created_at || new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    }
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      setUser(firebaseUser)
+      setLoading(false)
+      setInitialized(true)
+      if (firebaseUser) {
+        const profileRef = doc(db, "profiles", firebaseUser.uid)
+        const profileSnap = await getDoc(profileRef)
+        if (profileSnap.exists()) {
+          setUserProfile(profileSnap.data() as UserProfile)
+        } else {
+          setUserProfile(null)
+        }
+      } else {
+        setUserProfile(null)
+      }
+    })
+    return () => unsubscribe()
   }, [])
 
-  // Initialize auth state only once
-  useEffect(() => {
-    if (initializationRef.current) return
-    initializationRef.current = true
+  const signIn = useCallback(async (email: string, password: string) => {
+    await signInWithEmailAndPassword(auth, email, password)
+  }, [])
 
-    const initializeAuth = async () => {
-      try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession()
-
-        if (session?.user) {
-          setUser(session.user)
-          const profile = createMockProfile(session.user, wallet.address || undefined)
-          setUserProfile(profile)
-        }
-      } catch (error) {
-        console.error("Error initializing auth:", error)
-      } finally {
-        setLoading(false)
-        setInitialized(true)
-      }
+  const signUp = useCallback(async (email: string, password: string, name: string) => {
+    const result = await createUserWithEmailAndPassword(auth, email, password)
+    await updateProfile(result.user, { displayName: name })
+    // Create profile in Firestore
+    const profile: UserProfile = {
+      id: result.user.uid,
+      email: result.user.email || "",
+      name,
+      avatar_url: result.user.photoURL || "",
+      wallet_address: wallet.address || undefined,
+      bio: "Sustainable fashion enthusiast",
+      location: "",
+      website: "",
+      instagram_handle: "",
+      green_tokens: 0,
+      sustainability_score: 0,
+      total_items_listed: 0,
+      total_items_sold: 0,
+      total_items_donated: 0,
+      total_co2_saved: 0,
+      is_verified: result.user.emailVerified,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
     }
-
-    initializeAuth()
-
-    // Listen for auth changes
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
-      try {
-        if (event === "SIGNED_IN" && session?.user) {
-          setUser(session.user)
-          const profile = createMockProfile(session.user, wallet.address || undefined)
-          setUserProfile(profile)
-        } else if (event === "SIGNED_OUT") {
-          setUser(null)
-          setUserProfile(null)
-        } else if (event === "TOKEN_REFRESHED" && session?.user) {
-          // Update user data on token refresh
-          setUser(session.user)
-          if (userProfile) {
-            const updatedProfile = createMockProfile(session.user, wallet.address || undefined)
-            setUserProfile(updatedProfile)
-          }
-        }
-      } catch (error) {
-        console.error("Error handling auth state change:", error)
-      }
-    })
-
-    return () => {
-      subscription.unsubscribe()
-    }
-  }, [supabase.auth, createMockProfile, wallet.address, userProfile])
-
-  // Update wallet address in profile when wallet changes (but don't recreate entire profile)
-  useEffect(() => {
-    if (userProfile && wallet.address && userProfile.wallet_address !== wallet.address) {
-      setUserProfile((prev) =>
-        prev
-          ? {
-              ...prev,
-              wallet_address: wallet.address || undefined,
-              updated_at: new Date().toISOString(),
-            }
-          : null,
-      )
-    }
-  }, [wallet.address, userProfile])
-
-  const signIn = useCallback(
-    async (email: string, password: string) => {
-      if (!wallet.address) {
-        throw new Error("Please connect your wallet first")
-      }
-
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      })
-
-      if (error) {
-        // Handle specific auth errors
-        if (error.message.includes("Invalid login credentials")) {
-          throw new Error("Invalid email or password")
-        } else if (error.message.includes("Email not confirmed")) {
-          throw new Error("Please check your email and click the confirmation link")
-        } else {
-          throw error
-        }
-      }
-
-      return data
-    },
-    [wallet.address, supabase.auth],
-  )
-
-  const signUp = useCallback(
-    async (email: string, password: string, name: string) => {
-      if (!wallet.address) {
-        throw new Error("Please connect your wallet first")
-      }
-
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: {
-            name,
-            full_name: name,
-            wallet_address: wallet.address,
-          },
-        },
-      })
-
-      if (error) {
-        // Handle specific signup errors
-        if (error.message.includes("User already registered")) {
-          throw new Error("An account with this email already exists")
-        } else if (error.message.includes("Password should be at least")) {
-          throw new Error("Password must be at least 6 characters long")
-        } else {
-          throw error
-        }
-      }
-
-      return data
-    },
-    [wallet.address, supabase.auth],
-  )
+    await setDoc(doc(db, "profiles", result.user.uid), profile)
+    setUserProfile(profile)
+  }, [wallet.address])
 
   const signInWithGoogle = useCallback(async () => {
-    if (!wallet.address) {
-      throw new Error("Please connect your wallet first")
+    const provider = new GoogleAuthProvider()
+    const result = await signInWithPopup(auth, provider)
+    // Create profile in Firestore if not exists
+    const profileRef = doc(db, "profiles", result.user.uid)
+    const profileSnap = await getDoc(profileRef)
+    if (!profileSnap.exists()) {
+      const profile: UserProfile = {
+        id: result.user.uid,
+        email: result.user.email || "",
+        name: result.user.displayName || "User",
+        avatar_url: result.user.photoURL || "",
+        wallet_address: wallet.address || undefined,
+        bio: "Sustainable fashion enthusiast",
+        location: "",
+        website: "",
+        instagram_handle: "",
+        green_tokens: 0,
+        sustainability_score: 0,
+        total_items_listed: 0,
+        total_items_sold: 0,
+        total_items_donated: 0,
+        total_co2_saved: 0,
+        is_verified: result.user.emailVerified,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }
+      await setDoc(profileRef, profile)
+      setUserProfile(profile)
+    } else {
+      setUserProfile(profileSnap.data() as UserProfile)
     }
-
-    const { data, error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
-        queryParams: {
-          access_type: "offline",
-          prompt: "consent",
-        },
-      },
-    })
-
-    if (error) {
-      throw error
-    }
-
-    return data
-  }, [wallet.address, supabase.auth])
+  }, [wallet.address])
 
   const signOut = useCallback(async () => {
-    const { error } = await supabase.auth.signOut()
-    if (error) throw error
-
-    // Don't disconnect wallet automatically - let user choose
+    await firebaseSignOut(auth)
     setUser(null)
     setUserProfile(null)
-  }, [supabase.auth])
+  }, [])
 
-  const resetPassword = useCallback(
-    async (email: string) => {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/auth/reset-password`,
-      })
+  const resetPassword = useCallback(async (email: string) => {
+    await sendPasswordResetEmail(auth, email)
+  }, [])
 
-      if (error) {
-        throw error
-      }
-    },
-    [supabase.auth],
-  )
+  const resendConfirmation = useCallback(async (email: string) => {
+    // Firebase does not support resending confirmation directly
+    // You can trigger a password reset as a workaround
+    await sendPasswordResetEmail(auth, email)
+  }, [])
 
-  const resendConfirmation = useCallback(
-    async (email: string) => {
-      const { error } = await supabase.auth.resend({
-        type: "signup",
-        email,
-        options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
-        },
-      })
-
-      if (error) {
-        throw error
-      }
-    },
-    [supabase.auth],
-  )
-
-  const updateUserProfile = useCallback(
-    async (data: Partial<UserProfile>) => {
-      if (!user || !userProfile) return
-
-      try {
-        // In production, this would update Supabase:
-        // const { error } = await supabase.from("users").upsert({
-        //   id: user.id,
-        //   ...userProfile,
-        //   ...data,
-        //   updated_at: new Date().toISOString(),
-        // })
-
-        // For now, update local state
-        setUserProfile((prev) =>
-          prev
-            ? {
-                ...prev,
-                ...data,
-                updated_at: new Date().toISOString(),
-              }
-            : null,
-        )
-      } catch (error) {
-        console.error("Error updating user profile:", error)
-        throw error
-      }
-    },
-    [user, userProfile],
-  )
+  const updateUserProfile = useCallback(async (data: Partial<UserProfile>) => {
+    if (!user) return
+    const profileRef = doc(db, "profiles", user.uid)
+    await setDoc(profileRef, { ...userProfile, ...data, updated_at: new Date().toISOString() })
+    setUserProfile((prev) => prev ? { ...prev, ...data, updated_at: new Date().toISOString() } : null)
+  }, [user, userProfile])
 
   const value = {
     user,
@@ -317,9 +187,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 }
 
 export function useAuth() {
-  const context = useContext(AuthContext)
-  if (context === undefined) {
-    throw new Error("useAuth must be used within an AuthProvider")
-  }
-  return context
+  const ctx = useContext(AuthContext)
+  if (!ctx) throw new Error("useAuth must be used within AuthProvider")
+  return ctx
 }

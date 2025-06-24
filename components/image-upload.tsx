@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Upload, X, Loader2 } from "lucide-react"
 import Image from "next/image"
+import { uploadToCloudinary } from "@/lib/cloudinary"
 
 interface ImageUploadProps {
   onUpload: (imageUrl: string) => void
@@ -24,23 +25,9 @@ export function ImageUpload({ onUpload }: ImageUploadProps) {
     setUploading(true)
 
     try {
-      const formData = new FormData()
-      formData.append("file", file)
-      formData.append("upload_preset", process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET || "clothcycle")
-
-      const response = await fetch(
-        `https://api.cloudinary.com/v1_1/${process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME}/image/upload`,
-        {
-          method: "POST",
-          body: formData,
-        },
-      )
-
-      if (response.ok) {
-        const data = await response.json()
-        setImageUrl(data.secure_url)
-        onUpload(data.secure_url)
-      }
+      const imageUrl = await uploadToCloudinary(file)
+      setImageUrl(imageUrl)
+      onUpload(imageUrl)
     } catch (error) {
       console.error("Upload failed:", error)
     } finally {
